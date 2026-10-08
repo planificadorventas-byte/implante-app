@@ -764,6 +764,10 @@
   .scrimbg { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 40; display: none; }
   .scrimbg.open { display: block; }
   @media (min-width: 901px) { .scrimbg { display: none !important; } }
+
+  .ed9001-note { margin-top: 8px; padding: 10px 12px; border-radius: var(--r); font-size: 12px; line-height: 1.6;
+    color: var(--text-mid); background: var(--action-bg); border: 1px solid rgba(79,157,255,.32); }
+  .ed9001-note b { color: var(--text); }
 </style>
 
 <div class="app">
@@ -948,7 +952,8 @@
     if (!db._sync.url) db._sync.url = DEFAULT_CLOUD_URL;
     db._sync.auto = true;
     db.systems.forEach(s=>{
-      if(!Array.isArray(s.tasks)) s.tasks = buildTaskSet(s.norms, s.docs);
+      ensureEdition(s);
+      syncTaskSet(s);
       (s.docs||[]).forEach(d=>{ if(!Array.isArray(d.history)) d.history=[{v:d.version||"1.0", date:d.updatedAt||stamp(), action:"Documento generado", note:""}]; });
       ensureModules(s);
     });
@@ -1007,7 +1012,7 @@
     if(!silent && !confirm("Se reemplazarán los datos de este equipo por los de la nube. ¿Continuar?")) return;
     const keepSync = db._sync;
     db = { clients:data.clients, certificates:data.certificates, audits:data.audits, nonconformities:data.nonconformities, documents:data.documents, systems:Array.isArray(data.systems)?data.systems:[], _sync:keepSync };
-    db.systems.forEach(s=>{ if(!Array.isArray(s.tasks)) s.tasks=buildTaskSet(s.norms, s.docs); (s.docs||[]).forEach(d=>{ if(!Array.isArray(d.history)) d.history=[{v:d.version||"1.0", date:stamp(), action:"Documento generado", note:""}]; }); ensureModules(s); });
+    db.systems.forEach(s=>{ ensureEdition(s); syncTaskSet(s); (s.docs||[]).forEach(d=>{ if(!Array.isArray(d.history)) d.history=[{v:d.version||"1.0", date:stamp(), action:"Documento generado", note:""}]; }); ensureModules(s); });
     reconcileStatuses(); db._sync.last=stamp();
     openSystemId=null; sysTab="docs"; current="dashboard";
     save(); render(); if(!silent){ closeModal(); toast("Datos cargados de la nube"); }
@@ -1104,7 +1109,7 @@
       const syss=sel.systems;
       if(!syss.length) return "La organización aún no ha creado ningún sistema de gestión.";
       const blocks=syss.map(s=>{ const p=planStats(s); const ap=s.docs.filter(d=>d.status==="Aprobado").length;
-        return `• ${s.org} — Normas: ${s.norms.map(n=>NORMS[n]?NORMS[n].code:n).join(", ")} | Sector: ${s.sector} | Alcance: ${(s.scope||"(sin definir)").slice(0,120)} | Implantación: ${p.pct}% (${p.impl}/${p.aplicables}) | Docs aprobados: ${ap}/${s.docs.length}`;
+        return `• ${s.org} — Normas: ${s.norms.map(n=>normCode(n,s)).join(", ")} | Sector: ${s.sector} | Alcance: ${(s.scope||"(sin definir)").slice(0,120)} | Implantación: ${p.pct}% (${p.impl}/${p.aplicables}) | Docs aprobados: ${ap}/${s.docs.length}`;
       }).join("\n");
       const ncOpen=db.nonconformities.filter(n=>n.status!=="Cerrada");
       const ncLines=ncOpen.length?ncOpen.map(n=>`- ${n.severity} (${n.standard||""}) ${clientName(n.clientId)}: ${(n.description||"").slice(0,80)}`).join("\n"):"Ninguna abierta.";
@@ -1118,7 +1123,7 @@
     const ncLines = ncOpen.length ? ncOpen.map(n=>`- ${n.severity} (${n.standard||""}) cláusula ${n.clause||"—"}: ${(n.description||"").slice(0,90)}`).join("\n") : "Ninguna abierta.";
     return `Organización: ${s.org}
 Sector: ${s.sector}
-Normas del sistema: ${s.norms.map(n=>NORMS[n]?NORMS[n].code:n).join(", ")}
+Normas del sistema: ${s.norms.map(n=>normCode(n,s)).join(", ")}
 Alcance: ${s.scope||"(sin definir)"}
 Actividades: ${s.activities||"(sin definir)"}
 Emplazamientos: ${s.sites||"—"} · Plantilla: ${s.headcount||"—"}
@@ -1181,7 +1186,7 @@ ${ncLines}${aiModuleContext(s)}`;
     const sel=aiSelectedSystem();
     const s = sel.all ? (db.systems||[])[0] : sel.system;
     const nl="\n";
-    const head = s ? `**${s.org}** · ${s.norms.map(n=>NORMS[n]?NORMS[n].code:n).join(", ")}` : "";
+    const head = s ? `**${s.org}** · ${s.norms.map(n=>normCode(n,s)).join(", ")}` : "";
     const cm = t.match(/(?:cl[aá]usula|punto|requisito|apartado)\s*([0-9]{1,2}(?:\.[0-9]+){0,2})/) || t.match(/\b((?:4|5|6|7|8|9|10)(?:\.[0-9]+){1,2})\b/);
     if(cm){
       const cl=cm[1]; const info=CLAUSE_INFO[cl]||CLAUSE_INFO[cl.split(".")[0]];
@@ -1279,7 +1284,7 @@ ${ncLines}${aiModuleContext(s)}`;
       return `${head} — ${s.docs.length} documentos:${nl}${nl}${parts}`;
     }
     if(/(norma|iso|esquema|9001|14001|45001|22000|27001|37001|42001|50001|haccp)/.test(t) && s){
-      return `${head}${nl}${nl}Tu sistema integra: ${s.norms.map(n=>`**${NORMS[n]?NORMS[n].code:n}** (${NORMS[n]?NORMS[n].name:""})`).join(", ")}.${nl}Todas comparten la estructura de alto nivel (Anexo SL, capítulos 4 a 10), por lo que se gestionan de forma integrada. Consulta el documento «Matriz de Integración» para ver la correspondencia.`;
+      return `${head}${nl}${nl}Tu sistema integra: ${s.norms.map(n=>`**${normCode(n,s)}** (${NORMS[n]?NORMS[n].name:""})`).join(", ")}.${nl}Todas comparten la estructura de alto nivel (Anexo SL, capítulos 4 a 10), por lo que se gestionan de forma integrada. Consulta el documento «Matriz de Integración» para ver la correspondencia.`;
     }
     if(/(sector|proceso|aspecto|peligro)/.test(t) && s){
       const sd=sectorData(s.sector);
@@ -1396,7 +1401,7 @@ ${buildAiContext()}`;
     const sel=aiSelectedSystem();
     const curVal = aiSystemId || (sel.system?sel.system.id:"");
     const sysSelector = syss.length ? `<select id="aiSysSel" class="ai-sysSel">
-        ${syss.map(s=>`<option value="${s.id}" ${curVal===s.id?"selected":""}>${esc(s.org)} · ${s.norms.map(n=>esc(NORMS[n]?NORMS[n].code:n)).join("/")}</option>`).join("")}
+        ${syss.map(s=>`<option value="${s.id}" ${curVal===s.id?"selected":""}>${esc(s.org)} · ${s.norms.map(n=>esc(normCode(n,s))).join("/")}</option>`).join("")}
         ${syss.length>1?`<option value="all" ${aiSystemId==="all"?"selected":""}>▚ Todos los sistemas (${syss.length})</option>`:""}
       </select>` : "";
     const ctxLabel = sel.all
@@ -1568,7 +1573,7 @@ function doPost(e){
     // El sistema de gestión integrado de la propia empresa (9001+14001+45001).
     const sys0 = buildSystem({
       org: "Metalúrgica Andina S.A.", clientId: c1, sector: "Industria manufacturera",
-      norms: ["9001","14001","45001"],
+      norms: ["9001","14001","45001"], ed9001: "2026",
       scope: "Diseño, fabricación y mecanizado de componentes metálicos para el sector de automoción, incluyendo tratamientos superficiales y expedición, en las plantas de Sede Central y Planta Norte.",
       activities: "Diseño de piezas, mecanizado CNC, soldadura, tratamiento superficial, control de calidad y expedición.",
       sites: "2 centros productivos", headcount: "120",
@@ -1896,7 +1901,7 @@ function doPost(e){
               return `<div class="row agenda-row" data-goto="sistema:${s.id}">
                 <div class="r-main" style="min-width:0">
                   <div class="r-title">${esc(s.org)}</div>
-                  <div class="r-sub">${s.norms.map(n=>esc(NORMS[n].code)).join(" · ")}</div>
+                  <div class="r-sub">${s.norms.map(n=>esc(normCode(n,s))).join(" · ")}</div>
                   <div class="sc-foot" style="margin-top:8px"><div class="progressbar"><i style="width:${p.pct}%"></i></div><span class="mono">${p.pct}%</span></div>
                 </div>
               </div>`;
@@ -1992,7 +1997,7 @@ function doPost(e){
         <td><span class="mono">${fmtDate(a.date)}</span></td>
         <td>${ncCount?`<span class="mono">${ncCount}</span> NC`:'<span class="cell-sub">0</span>'}</td>
         <td>${pill(res,a.result)}</td>
-        <td>${rowbtns("auditoria",a.id)}</td>
+        <td>${rowbtns("auditoria",a.id,true)}</td>
       </tr>`;
     }).join("");
     return `
@@ -2022,7 +2027,7 @@ function doPost(e){
         <td><div class="cell-sub" title="${esc(n.description)}">${esc((n.description||"").slice(0,46))}${(n.description||"").length>46?"…":""}</div></td>
         <td><span class="mono">${fmtDate(n.dueDate)}</span>${overdue?'<div class="cell-sub" style="color:var(--bad)">vencido</div>':''}</td>
         <td>${pill(stt,n.status)}</td>
-        <td>${rowbtns("nc",n.id)}</td>
+        <td>${rowbtns("nc",n.id,true)}</td>
       </tr>`;
     }).join("");
     return `
@@ -2067,8 +2072,9 @@ function doPost(e){
       <tbody>${rows || `<tr><td colspan="${headers.length}"><div class="empty">${iconBox()}<p>${emptyMsg}</p><div class="r-sub">Usa el botón de arriba para crear el primer registro.</div></div></td></tr>`}</tbody>
     </table></div>`;
   }
-  function rowbtns(kind,id){
+  function rowbtns(kind,id,printable){
     return `<div class="rowbtns">
+      ${printable?`<button class="iconbtn" data-print="${kind}" data-id="${id}" title="Imprimir / PDF">${iconPrint()}</button>`:""}
       <button class="iconbtn" data-edit="${kind}" data-id="${id}" title="Editar">${iconEdit()}</button>
       <button class="iconbtn del" data-del="${kind}" data-id="${id}" title="Eliminar">${iconTrash()}</button>
     </div>`;
@@ -2086,6 +2092,7 @@ function doPost(e){
     document.querySelectorAll("[data-new]").forEach(b=>b.onclick=()=>openForm(b.dataset.new,null));
     document.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>openForm(b.dataset.edit,b.dataset.id));
     document.querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>del(b.dataset.del,b.dataset.id));
+    document.querySelectorAll("[data-print]").forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); printRecord(b.dataset.print,b.dataset.id); });
     const segwrap = document.querySelector("[data-seg]");
     if(segwrap){ segwrap.querySelectorAll(".seg").forEach(s=>s.onclick=()=>{ filters[current]=s.dataset.val; render(); }); }
     if(current==="sistemas") wireSistemas();
@@ -2151,7 +2158,7 @@ function doPost(e){
   function systemOptions(sel, clientId){
     let sys = db.systems||[];
     if(clientId){ const scoped=sys.filter(s=>s.clientId===clientId); if(scoped.length) sys=scoped; }
-    return `<option value="">— sin vincular —</option>`+sys.map(s=>`<option value="${s.id}" ${s.id===sel?"selected":""}>${esc(s.org)} (${s.norms.map(n=>NORMS[n]?NORMS[n].code:n).join("/")})</option>`).join("");
+    return `<option value="">— sin vincular —</option>`+sys.map(s=>`<option value="${s.id}" ${s.id===sel?"selected":""}>${esc(s.org)} (${s.norms.map(n=>normCode(n,s)).join("/")})</option>`).join("");
   }
   function linkRefOptions(systemId, sel){
     const s = getSystem(systemId);
@@ -2391,7 +2398,7 @@ function doPost(e){
         nonconformities:data.nonconformities, documents:data.documents,
         systems:Array.isArray(data.systems)?data.systems:[], _sync:keepSync
       };
-      db.systems.forEach(s=>{ if(!Array.isArray(s.tasks)) s.tasks=buildTaskSet(s.norms, s.docs); ensureModules(s); });
+      db.systems.forEach(s=>{ ensureEdition(s); syncTaskSet(s); ensureModules(s); });
       reconcileStatuses();
       openSystemId=null; sysTab="docs"; current="dashboard";
       save(); render();
@@ -2528,7 +2535,7 @@ function doPost(e){
 
   /* ---- Registro de normas ---- */
   const NORMS = {
-    "9001":  { code:"ISO 9001:2015",     name:"Gestión de la Calidad",            short:"Calidad",     hls:true,  color:"#4f9dff" },
+    "9001":  { code:"ISO 9001",           name:"Gestión de la Calidad",            short:"Calidad",     hls:true,  color:"#4f9dff", editions:["2015","2026"] },
     "14001": { code:"ISO 14001:2015",    name:"Gestión Ambiental",                short:"Ambiental",   hls:true,  color:"#33d69f" },
     "45001": { code:"ISO 45001:2018",    name:"Seguridad y Salud en el Trabajo",  short:"SST",         hls:true,  color:"#f6b23f" },
     "22000": { code:"ISO 22000:2018",    name:"Inocuidad de los Alimentos",       short:"Inocuidad",   hls:true,  color:"#7dd3fc" },
@@ -2539,6 +2546,12 @@ function doPost(e){
     "haccp": { code:"HACCP (Codex Alimentarius)", name:"Análisis de Peligros y Puntos de Control Crítico", short:"HACCP", hls:false, color:"#34d399" },
   };
   const NORM_ORDER = ["9001","14001","45001","22000","27001","42001","37001","50001","haccp"];
+  // Código de la norma resolviendo la edición de ISO 9001 según el sistema (2015 / 2026).
+  // Sin sistema (contextos genéricos) devuelve la etiqueta neutra "ISO 9001".
+  function normCode(n, sys){
+    if(n==="9001"){ const ed = sys && sys.ed9001; return ed ? ("ISO 9001:"+ed) : "ISO 9001"; }
+    return NORMS[n] ? NORMS[n].code : n;
+  }
   function normChip(id){ const n=NORMS[id]; if(!n) return ""; return `<span class="norm-chip" style="color:${n.color};border-color:${n.color}55;background:${n.color}18">${esc(n.short)}</span>`; }
   function normTag(id){ const n=NORMS[id]; return n?`<span class="tag" style="background:${n.color};">${esc(n.code)}</span>`:""; }
 
@@ -2625,10 +2638,10 @@ function doPost(e){
     {k:"manual",      t:"Manual del Sistema de Gestión",                       cat:"marco",  cl:"4.4",  d:"Documento marco que describe el sistema, su alcance, procesos e interacciones."},
     {k:"alcance",     t:"Alcance del Sistema de Gestión",                      cat:"marco",  cl:"4.3",  d:"Límites y aplicabilidad del sistema de gestión."},
     {k:"procesos",    t:"Mapa de Procesos y Fichas de Proceso",                cat:"marco",  cl:"4.4",  d:"Identificación de los procesos, su secuencia e interacción."},
-    {k:"contexto",    t:"Análisis del Contexto y Partes Interesadas",          cat:"planif", cl:"4.1-4.2", d:"Cuestiones internas y externas y necesidades de las partes interesadas."},
+    {k:"contexto",    t:"Análisis del Contexto y Partes Interesadas",          cat:"planif", cl:"4.1-4.2", d:"Cuestiones internas y externas y necesidades de las partes interesadas. En ISO 9001:2026 el cambio climático se integra ya como requisito permanente (antes amd. 2024), no opcional."},
     {k:"politica",    t:"Política del Sistema de Gestión",                     cat:"planif", cl:"5.2",  d:"Compromisos de la dirección y marco para los objetivos."},
     {k:"roles",       t:"Roles, Responsabilidades y Autoridades",              cat:"planif", cl:"5.3",  d:"Asignación de responsabilidades dentro del sistema."},
-    {k:"riesgos",     t:"Gestión de Riesgos y Oportunidades",                  cat:"proc",   cl:"6.1",  d:"Metodología para determinar y tratar riesgos y oportunidades."},
+    {k:"riesgos",     t:"Gestión de Riesgos y Oportunidades",                  cat:"proc",   cl:"6.1",  d:"Metodología para determinar y tratar riesgos y oportunidades. En ISO 9001:2026 se reorganiza en subcláusulas diferenciadas (6.1.1 a 6.1.3) que separan el tratamiento de riesgos del de oportunidades."},
     {k:"matriz-riesgos", t:"Matriz de Riesgos y Oportunidades",                cat:"registro", cl:"6.1", d:"Registro de riesgos y oportunidades, su evaluación y tratamiento."},
     {k:"objetivos",   t:"Objetivos y Planificación para Lograrlos",            cat:"planif", cl:"6.2",  d:"Objetivos del sistema y planes de acción para alcanzarlos."},
     {k:"competencia", t:"Competencia, Formación y Toma de Conciencia",         cat:"proc",   cl:"7.2-7.3", d:"Gestión de la competencia y la sensibilización del personal."},
@@ -2640,20 +2653,22 @@ function doPost(e){
     {k:"auditoria",   t:"Auditoría Interna",                                   cat:"proc",   cl:"9.2",  d:"Programa y ejecución de auditorías internas."},
     {k:"revision",    t:"Revisión por la Dirección",                           cat:"proc",   cl:"9.3",  d:"Revisión periódica del sistema por la alta dirección."},
     {k:"noconf",      t:"No Conformidad y Acción Correctiva",                  cat:"proc",   cl:"10.2", d:"Tratamiento de no conformidades y acciones correctivas."},
-    {k:"mejora",      t:"Mejora Continua",                                     cat:"proc",   cl:"10.1-10.3", d:"Marco para la mejora continua del sistema."},
+    {k:"mejora",      t:"Mejora Continua",                                     cat:"proc",   cl:"10.1", d:"Marco para la mejora continua del sistema. En ISO 9001:2026 la mejora continua es la cláusula 10.1 y el Capítulo 10 solo contiene 10.1 (Mejora continua) y 10.2 (No conformidad y acción correctiva); el antiguo 10.3 se eliminó."},
   ];
 
   /* ---- Documentos específicos por norma ---- */
   const NORM_DOCS = {
     "9001":[
-      {k:"9001-requisitos", t:"Requisitos para Productos y Servicios",         cat:"espec", cl:"8.2", d:"Determinación y revisión de los requisitos del cliente."},
+      {k:"9001-terminos",   t:"Términos y Definiciones Propios del SGC",       cat:"marco", cl:"3",   d:"Términos y definiciones específicos de gestión de la calidad incorporados directamente en la norma (ed. 2026), en línea con ISO 9000."},
+      {k:"9001-cultura",    t:"Cultura de la Calidad y Comportamiento Ético",  cat:"planif", cl:"5.1", d:"Novedad 2026: compromisos verificables de la dirección para fomentar una cultura de la calidad y un comportamiento ético, y su relación con el liderazgo y la conciencia del personal."},
+      {k:"9001-requisitos", t:"Requisitos para Productos y Servicios",         cat:"espec", cl:"8.2", d:"Determinación, comunicación y revisión de los requisitos del cliente. Ed. 2026: la comunicación con el cliente (8.2.1 e) incluye información sobre acciones de contingencia ante disrupciones en la provisión de productos o servicios."},
       {k:"9001-diseno",     t:"Diseño y Desarrollo",                           cat:"espec", cl:"8.3", d:"Control de las etapas de diseño y desarrollo."},
-      {k:"9001-compras",    t:"Control de Proveedores Externos (Compras)",     cat:"espec", cl:"8.4", d:"Evaluación, selección y control de proveedores."},
+      {k:"9001-compras",    t:"Control de Proveedores Externos y Resiliencia de la Cadena de Suministro", cat:"espec", cl:"8.4", d:"Evaluación, selección y control de proveedores. Ed. 2026: mayor énfasis en la resiliencia, continuidad y riesgos de la cadena de suministro (geopolíticos, logísticos, climáticos y digitales)."},
       {k:"9001-produccion", t:"Control de la Producción y del Servicio",       cat:"espec", cl:"8.5", d:"Condiciones controladas para la producción y prestación del servicio."},
       {k:"9001-trazab",     t:"Identificación y Trazabilidad",                 cat:"espec", cl:"8.5.2", d:"Identificación del estado y trazabilidad de las salidas."},
       {k:"9001-noconf-sal", t:"Control de Salidas No Conformes",               cat:"espec", cl:"8.7", d:"Tratamiento de productos y servicios no conformes."},
       {k:"9001-satisf",     t:"Satisfacción del Cliente",                      cat:"espec", cl:"9.1.2", d:"Seguimiento de la percepción del cliente."},
-      {k:"9001-equipos",    t:"Control de Equipos de Seguimiento y Medición",  cat:"espec", cl:"7.1.5", d:"Calibración y verificación de los recursos de medición."},
+      {k:"9001-equipos",    t:"Control de Equipos de Seguimiento y Medición, y Validación de Software", cat:"espec", cl:"7.1.5", d:"Calibración y verificación de los recursos de medición. Ed. 2026: incluye la validación del software utilizado para el seguimiento y la medición, asegurando datos de calidad fiables."},
     ],
     "14001":[
       {k:"14001-aspectos",  t:"Identificación y Evaluación de Aspectos Ambientales", cat:"espec", cl:"6.1.2", d:"Determinación de aspectos e impactos ambientales significativos."},
@@ -2747,7 +2762,7 @@ function doPost(e){
   const DOC_STATUSES = ["Pendiente","En elaboración","En revisión","Aprobado"];
 
   /* ---- Construcción del conjunto documental (deduplicado + integrado) ---- */
-  function buildDocSet(norms){
+  function buildDocSet(norms, ed9001){
     const has = (id)=>norms.includes(id);
     const hlsNorms = norms.filter(n=>NORMS[n] && NORMS[n].hls);
     const hasHLS = hlsNorms.length>0;
@@ -2762,7 +2777,10 @@ function doPost(e){
       flat.push({k:"integracion", t:"Matriz de Integración y Correspondencia entre Normas", cat:"marco", cl:"4.4", d:"correspondencia entre los esquemas integrados y su documentación común", norms:hlsNorms.slice()});
     }
 
-    norms.forEach(n=>{ (NORM_DOCS[n]||[]).forEach(d=> flat.push(Object.assign({}, d, {norms:[n]}))); });
+    // Documentos propios de la edición 2026 de ISO 9001 (no se generan en sistemas 2015)
+    const only2026 = new Set(["9001-terminos","9001-cultura"]);
+    const skip2026 = (ed9001!=="2026");
+    norms.forEach(n=>{ (NORM_DOCS[n]||[]).forEach(d=>{ if(skip2026 && only2026.has(d.k)) return; flat.push(Object.assign({}, d, {norms:[n]})); }); });
 
     // Fusionar requisitos compartidos
     Object.entries(MERGE).forEach(([mk,mdef])=>{
@@ -2773,6 +2791,11 @@ function doPost(e){
         flat.push({k:mk, t:mdef.t, cat:mdef.cat, cl:mdef.cl, d:mdef.d, norms:unionNorms});
       }
     });
+
+    // Referencia de cláusula de la "Mejora Continua" según edición:
+    // 10.1 en ISO 9001:2026; 10.3 en las ediciones basadas en la HLS previa (2015/2018).
+    const _mej = flat.find(d=>d.k==="mejora");
+    if(_mej){ _mej.cl = (ed9001==="2026") ? "10.1" : "10.3"; }
 
     // Ordenar por categoría y asignar código
     flat.sort((a,b)=> CAT_ORDER.indexOf(a.cat)-CAT_ORDER.indexOf(b.cat));
@@ -2790,15 +2813,16 @@ function doPost(e){
 
   function buildSystem(input){
     const norms = (input.norms||[]).filter(n=>NORMS[n]);
-    const docs = buildDocSet(norms);
+    const ed9001 = norms.includes("9001") ? (input.ed9001||"2015") : null;
+    const docs = buildDocSet(norms, ed9001);
     return {
       id: input.id||uid("sys"),
       org: input.org||"Organización",
       clientId: input.clientId||null,
       sector: input.sector||SECTOR_LIST[0],
-      norms, scope: input.scope||"", activities: input.activities||"",
+      norms, ed9001, scope: input.scope||"", activities: input.activities||"",
       sites: input.sites||"", headcount: input.headcount||"", responsible: input.responsible||"",
-      docs, tasks: buildTaskSet(norms, docs),
+      docs, tasks: buildTaskSet(norms, docs, ed9001),
       risks: [], foda: {f:"",o:"",d:"",a:""}, suppliers: [], kpis: [], comps: [], trainings: [], reviews: [], equipment: [], legal: [],
       createdAt: input.createdAt||stamp(), updatedAt: stamp()
     };
@@ -2806,20 +2830,24 @@ function doPost(e){
   // Garantiza que un sistema tenga inicializados los módulos de gestión (migración segura)
   function ensureModules(s){
     if(!Array.isArray(s.risks)) s.risks=[];
+    s.risks.forEach(r=>{ if(r.probRes===undefined) r.probRes=""; if(r.impRes===undefined) r.impRes=""; if(r.ncId===undefined) r.ncId=""; });
     if(!s.foda || typeof s.foda!=="object") s.foda={f:"",o:"",d:"",a:""};
     if(!Array.isArray(s.suppliers)) s.suppliers=[];
+    s.suppliers.forEach(v=>{ if(!v.frecuencia) v.frecuencia="Anual"; });
     if(!Array.isArray(s.kpis)) s.kpis=[];
+    s.kpis.forEach(k=>{ if(k.recursos===undefined) k.recursos=""; if(k.responsable===undefined) k.responsable=""; });
     if(!Array.isArray(s.comps)) s.comps=[];
     if(!Array.isArray(s.trainings)) s.trainings=[];
     if(!Array.isArray(s.reviews)) s.reviews=[];
     if(!Array.isArray(s.equipment)) s.equipment=[];
     if(!Array.isArray(s.legal)) s.legal=[];
+    s.legal.forEach(e=>{ if(!Array.isArray(e.historial)) e.historial=[]; });
     return s;
   }
   // Reconstruye docs conservando estado y ediciones al cambiar normas
   function rebuildSystemDocs(sys){
     const prev = {}; (sys.docs||[]).forEach(d=> prev[d.k]={status:d.status, custom:d.custom, version:d.version, history:d.history});
-    sys.docs = buildDocSet(sys.norms).map(d=>{
+    sys.docs = buildDocSet(sys.norms, sys.ed9001).map(d=>{
       if(prev[d.k]){ d.status=prev[d.k].status||d.status; if(prev[d.k].custom!=null) d.custom=prev[d.k].custom; d.version=prev[d.k].version||d.version; if(Array.isArray(prev[d.k].history)) d.history=prev[d.k].history; }
       return d;
     });
@@ -2855,6 +2883,7 @@ function doPost(e){
     {n:"8", t:"Operación"},
     {n:"9", t:"Evaluación del desempeño"},
     {n:"10", t:"Mejora"},
+    {n:"T", t:"Transición a la nueva edición (ISO 9001)"},
   ];
   const PHASE_LABEL = Object.fromEntries(PLAN_PHASES.map(p=>[p.n,p.t]));
   function chapterOf(cl){
@@ -2870,25 +2899,69 @@ function doPost(e){
     {k:"core-7.3", cl:"7.3",  t:"Desarrollar la toma de conciencia del personal"},
     {k:"core-9.1", cl:"9.1",  t:"Implantar el seguimiento, la medición y el análisis de resultados"},
   ];
+  // Desglose explícito de la cláusula 6.1 en subcláusulas propias del plan, conforme
+  // al texto OFICIAL de ISO 9001:2026: 6.1.1 Determinación de riesgos y oportunidades,
+  // 6.1.2 Acciones para abordar los RIESGOS y 6.1.3 Acciones para abordar las OPORTUNIDADES
+  // (riesgos y oportunidades se tratan por separado).
+  const RISK_SUBCLAUSES = [
+    {k:"risk-6.1.1", cl:"6.1.1", t:"6.1.1 Determinación de riesgos y oportunidades: al planificar el SGC, considerar el contexto (4.1) y los requisitos de las partes interesadas (4.2) para determinar los riesgos y oportunidades que es necesario abordar"},
+    {k:"risk-6.1.2", cl:"6.1.2", t:"6.1.2 Acciones para abordar los riesgos: determinar, analizar y evaluar los riesgos, planificar las acciones e integrarlas en los procesos del SGC, y evaluar su eficacia (proporcionales al impacto potencial)"},
+    {k:"risk-6.1.3", cl:"6.1.3", t:"6.1.3 Acciones para abordar las oportunidades: determinar, analizar y evaluar las oportunidades y planificar acciones para aprovecharlas, de forma diferenciada del tratamiento de los riesgos"},
+  ];
+  // Fase de transición 2015 → nueva edición. Son pasos de proceso (no requisitos
+  // citados textualmente), aplicables cuando el sistema incluye ISO 9001.
+  const TRANSITION_ACTIVITIES = [
+    {k:"trans-gap",   cl:"—", t:"Análisis de brechas ISO 9001:2015 → ISO 9001:2026 (gap analysis), contrastado con el texto oficial publicado"},
+    {k:"trans-plan",  cl:"—", t:"Elaborar el plan y el calendario de transición a la nueva edición"},
+    {k:"trans-form",  cl:"—", t:"Formar a la dirección y al equipo en los cambios de la nueva edición"},
+    {k:"trans-doc",   cl:"—", t:"Actualizar la documentación del sistema a los requisitos de la nueva edición"},
+    {k:"trans-audit", cl:"—", t:"Realizar una auditoría interna contra los requisitos de la nueva edición"},
+    {k:"trans-rev",   cl:"—", t:"Revisión por la dirección de la transición y preparación de la auditoría de certificación"},
+  ];
   // Genera el plan de tareas a partir de las normas y del conjunto documental del sistema
-  function buildTaskSet(norms, docs){
+  function buildTaskSet(norms, docs, ed9001){
     const hasHLS = (norms||[]).some(n=>NORMS[n] && NORMS[n].hls);
+    const has9001 = (norms||[]).includes("9001");
+    const is2026 = has9001 && ed9001==="2026";
     const tasks = [];
     if(hasHLS){
       CORE_ACTIVITIES.forEach(a=> tasks.push({ k:a.k, cl:a.cl, phase:chapterOf(a.cl), t:a.t, norms:[], docKey:null, status:"No iniciado", responsible:"", due:"" }));
     }
+    // Subcláusulas propias de 6.1 (solo ISO 9001 edición 2026)
+    if(is2026){
+      RISK_SUBCLAUSES.forEach(a=> tasks.push({ k:a.k, cl:a.cl, phase:"6", t:a.t, norms:["9001"], docKey:null, status:"No iniciado", responsible:"", due:"" }));
+    }
     (docs||[]).forEach(d=>{
       tasks.push({ k:"doc:"+d.k, cl:d.cl, phase:chapterOf(d.cl), t:"Elaborar e implantar «"+d.t+"»", norms:d.norms||[], docKey:d.k, status:"No iniciado", responsible:"", due:"" });
     });
-    // Orden por capítulo y por cláusula
-    const chOrder = ["4","5","6","7","8","9","10"];
+    // Fase de transición (solo ISO 9001 edición 2026)
+    if(is2026){
+      TRANSITION_ACTIVITIES.forEach(a=> tasks.push({ k:a.k, cl:a.cl, phase:"T", t:a.t, norms:["9001"], docKey:null, status:"No iniciado", responsible:"", due:"" }));
+    }
+    // Orden por capítulo y por cláusula (la transición «T» va al final)
+    const chOrder = ["4","5","6","7","8","9","10","T"];
     tasks.sort((a,b)=> chOrder.indexOf(a.phase)-chOrder.indexOf(b.phase) || String(a.cl).localeCompare(String(b.cl),"es",{numeric:true}));
     return tasks;
+  }
+  // Normaliza la edición de ISO 9001 de un sistema. Los sistemas guardados sin edición
+  // se asumen en 2026 (era la única contemplada antes de ofrecer 2015 como opción).
+  function ensureEdition(s){
+    if((s.norms||[]).includes("9001")){ if(!s.ed9001) s.ed9001="2026"; }
+    else s.ed9001=null;
+  }
+  // Añade al plan las tareas nuevas que aún no existan, sin tocar el estado de las ya presentes.
+  // Se usa al cargar para que los planes guardados incorporen las subcláusulas 6.1.x y la fase de transición.
+  function syncTaskSet(sys){
+    if(!Array.isArray(sys.tasks)){ sys.tasks = buildTaskSet(sys.norms, sys.docs, sys.ed9001); return; }
+    const have = new Set(sys.tasks.map(t=>t.k));
+    buildTaskSet(sys.norms, sys.docs, sys.ed9001).forEach(ft=>{ if(!have.has(ft.k)) sys.tasks.push(ft); });
+    const chOrder = ["4","5","6","7","8","9","10","T"];
+    sys.tasks.sort((a,b)=> chOrder.indexOf(a.phase)-chOrder.indexOf(b.phase) || String(a.cl).localeCompare(String(b.cl),"es",{numeric:true}));
   }
   // Reconstruye el plan conservando estado, responsable y plazo por clave de tarea
   function rebuildSystemTasks(sys){
     const prev={}; (sys.tasks||[]).forEach(t=> prev[t.k]={status:t.status, responsible:t.responsible, due:t.due});
-    sys.tasks = buildTaskSet(sys.norms, sys.docs).map(t=>{
+    sys.tasks = buildTaskSet(sys.norms, sys.docs, sys.ed9001).map(t=>{
       if(prev[t.k]){ t.status=prev[t.k].status||t.status; t.responsible=prev[t.k].responsible||""; t.due=prev[t.k].due||""; }
       return t;
     });
@@ -2908,7 +2981,7 @@ function doPost(e){
   /* ============================================================
      GENERACIÓN DE CONTENIDO DOCUMENTAL
      ============================================================ */
-  function normRefsList(sys){ return sys.norms.map(n=>`<li>${esc(NORMS[n].code)} — ${esc(NORMS[n].name)}</li>`).join(""); }
+  function normRefsList(sys){ return sys.norms.map(n=>`<li>${esc(normCode(n,sys))} — ${esc(NORMS[n].name)}</li>`).join(""); }
   function roleTable(rows){ return `<table><thead><tr><th>Función</th><th>Responsabilidad principal</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r[0])}</b></td><td>${esc(r[1])}</td></tr>`).join("")}</tbody></table>`; }
   function changeTable(sys){ return `<table><thead><tr><th>Versión</th><th>Fecha</th><th>Descripción del cambio</th></tr></thead><tbody><tr><td>1.0</td><td>${fmtDate((sys.createdAt||stamp()).slice(0,10))}</td><td>Edición inicial del documento.</td></tr></tbody></table>`; }
   function refBlock(sys, extra){
@@ -2949,7 +3022,7 @@ function doPost(e){
   /* Cuerpo genérico de procedimiento (adaptado) */
   function buildGeneric(doc, sys){
     const sd = sectorData(sys.sector);
-    const objeto = `<h2>Objeto</h2><p>Este documento tiene por objeto establecer la sistemática para <b>${esc(doc.d.toLowerCase())}</b> dentro del sistema de gestión de <b>${esc(sys.org)}</b>, dando cumplimiento a los requisitos de ${sys.norms.map(n=>esc(NORMS[n].code)).join(", ")} (cláusula ${esc(doc.cl)}).</p>`;
+    const objeto = `<h2>Objeto</h2><p>Este documento tiene por objeto establecer la sistemática para <b>${esc(doc.d.toLowerCase())}</b> dentro del sistema de gestión de <b>${esc(sys.org)}</b>, dando cumplimiento a los requisitos de ${sys.norms.map(n=>esc(normCode(n,sys))).join(", ")} (cláusula ${esc(doc.cl)}).</p>`;
     const alcance = `<h2>Alcance</h2><p>Aplica a las actividades incluidas en el alcance del sistema de gestión: <i>${esc(sys.scope||"(pendiente de definir)")}</i>${sys.activities?` Comprende los procesos de ${esc(sys.activities.toLowerCase())}.`:""}</p>`;
     const resp = `<h2>Responsabilidades</h2>${roleTable([
       ["Alta Dirección","Proporcionar recursos y aprobar el documento."],
@@ -2973,7 +3046,7 @@ function doPost(e){
       const sd=sectorData(sys.sector);
       const excl = sys.norms.includes("9001")&&!/dise/i.test(sys.activities||"")?`<p><b>Exclusiones:</b> el requisito 8.3 (Diseño y desarrollo) podría no ser aplicable si la organización no realiza actividades de diseño; su aplicabilidad debe justificarse en el alcance.</p>`:"";
       return `<h2>1. Presentación de la organización</h2><p><b>${esc(sys.org)}</b> es una organización del sector <b>${esc(sys.sector)}</b>${sys.headcount?` con una plantilla aproximada de ${esc(sys.headcount)} personas`:""}${sys.sites?` y ${esc(sys.sites)}`:""}.</p>
-      <h2>2. Objeto y campo de aplicación</h2><p>Este Manual describe el Sistema de Gestión ${sys.norms.length>1?"Integrado ":""}implantado conforme a ${sys.norms.map(n=>esc(NORMS[n].code)).join(", ")}, así como su alcance, estructura documental y la interacción de sus procesos.</p>
+      <h2>2. Objeto y campo de aplicación</h2><p>Este Manual describe el Sistema de Gestión ${sys.norms.length>1?"Integrado ":""}implantado conforme a ${sys.norms.map(n=>esc(normCode(n,sys))).join(", ")}, así como su alcance, estructura documental y la interacción de sus procesos.</p>
       <h2>3. Alcance del sistema</h2><p><i>${esc(sys.scope||"(pendiente de definir)")}</i></p>${excl}
       <h2>4. Normas de referencia</h2><ul>${normRefsList(sys)}</ul>
       <h2>5. Mapa de procesos</h2><p>El sistema se organiza en tres niveles de procesos:</p>
@@ -2986,7 +3059,7 @@ function doPost(e){
       <h2>7. Enfoque basado en procesos y riesgos</h2><p>La organización aplica el ciclo PHVA (Planificar-Hacer-Verificar-Actuar) y el pensamiento basado en riesgos a todos sus procesos.</p>`;
     },
     alcance:(doc,sys)=>{
-      return `<h2>Declaración del alcance</h2><p>El Sistema de Gestión ${sys.norms.length>1?"Integrado ":""}de <b>${esc(sys.org)}</b>, conforme a ${sys.norms.map(n=>esc(NORMS[n].code)).join(", ")}, cubre:</p>
+      return `<h2>Declaración del alcance</h2><p>El Sistema de Gestión ${sys.norms.length>1?"Integrado ":""}de <b>${esc(sys.org)}</b>, conforme a ${sys.norms.map(n=>esc(normCode(n,sys))).join(", ")}, cubre:</p>
       <blockquote style="border-left:3px solid #12335f;margin:8px 0;padding:6px 14px;background:#eef3fa;border-radius:0 8px 8px 0"><i>${esc(sys.scope||"(pendiente de definir el alcance)")}</i></blockquote>
       <h2>Límites físicos y organizativos</h2><ul><li><b>Emplazamientos:</b> ${esc(sys.sites||"por determinar")}.</li><li><b>Actividades:</b> ${esc(sys.activities||"las descritas en el alcance")}.</li><li><b>Sector:</b> ${esc(sys.sector)}.</li></ul>
       <h2>Aplicabilidad y exclusiones</h2><p>Todos los requisitos de las normas de referencia son aplicables salvo las exclusiones justificadas que, en su caso, se documenten. Ninguna exclusión afectará a la capacidad de la organización para asegurar la conformidad de sus productos/servicios ni a la satisfacción de las partes interesadas.</p>
@@ -3016,7 +3089,7 @@ function doPost(e){
     integracion:(doc,sys)=>{
       const norms=sys.norms;
       const chapters=[["4","Contexto de la organización"],["5","Liderazgo"],["6","Planificación"],["7","Apoyo"],["8","Operación"],["9","Evaluación del desempeño"],["10","Mejora"]];
-      const th = `<th>Capítulo (estructura Anexo SL)</th>`+norms.map(n=>`<th>${esc(NORMS[n].code)}</th>`).join("");
+      const th = `<th>Capítulo (estructura Anexo SL)</th>`+norms.map(n=>`<th>${esc(normCode(n,sys))}</th>`).join("");
       const chapRows = chapters.map(c=>`<tr><td><b>${c[0]}.</b> ${esc(c[1])}</td>${norms.map(()=>`<td style="text-align:center">●</td>`).join("")}</tr>`).join("");
       const docs=(sys.docs||[]).filter(d=>d.k!=="integracion");
       const thB = `<th>Código</th><th>Documento</th>`+norms.map(n=>`<th>${esc(NORMS[n].short)}</th>`).join("")+`<th>Tipo</th>`;
@@ -3025,7 +3098,7 @@ function doPost(e){
         const tipo = (d.norms.length>1 && d.norms.length===norms.length) ? "Común" : d.norms.length>1 ? "Integrado" : "Específico";
         return `<tr><td>${esc(d.code)}</td><td>${esc(d.t)}</td>${cells}<td>${tipo}</td></tr>`;
       }).join("");
-      return `<h2>Objeto</h2><p>Evidenciar la <b>integración</b> del sistema de gestión de <b>${esc(sys.org)}</b>, que combina los esquemas ${norms.map(n=>esc(NORMS[n].code)).join(", ")} bajo la estructura de alto nivel común (Anexo SL), compartiendo dirección, procesos y documentación en lugar de mantener sistemas separados.</p>
+      return `<h2>Objeto</h2><p>Evidenciar la <b>integración</b> del sistema de gestión de <b>${esc(sys.org)}</b>, que combina los esquemas ${norms.map(n=>esc(normCode(n,sys))).join(", ")} bajo la estructura de alto nivel común (Anexo SL), compartiendo dirección, procesos y documentación en lugar de mantener sistemas separados.</p>
       <h2>1. Correspondencia de la estructura (Anexo SL)</h2>
       <p>Las normas comparten los mismos capítulos, lo que permite gestionar sus requisitos de forma unificada (● capítulo aplicable a la norma):</p>
       <table><thead><tr>${th}</tr></thead><tbody>${chapRows}</tbody></table>
@@ -3178,7 +3251,7 @@ function doPost(e){
         "<b>Informe:</b> se documentan conformidades, no conformidades y oportunidades de mejora.",
         "<b>Seguimiento:</b> las no conformidades se tratan según el procedimiento de acción correctiva.",
       ]);
-      return objeto+`<h2>Alcance</h2><p>Todos los procesos y requisitos de ${sys.norms.map(n=>esc(NORMS[n].code)).join(", ")}.</p>`+refBlock(sys,["ISO 19011 — Directrices para la auditoría de sistemas de gestión"])+defBlock([["Hallazgo","Resultado de la evaluación de la evidencia de auditoría frente a los criterios."]])+steps+recordsBlock(["Programa anual de auditorías","Plan de auditoría","Informe de auditoría interna","Lista de verificación (checklist)"]);
+      return objeto+`<h2>Alcance</h2><p>Todos los procesos y requisitos de ${sys.norms.map(n=>esc(normCode(n,sys))).join(", ")}.</p>`+refBlock(sys,["ISO 19011 — Directrices para la auditoría de sistemas de gestión"])+defBlock([["Hallazgo","Resultado de la evaluación de la evidencia de auditoría frente a los criterios."]])+steps+recordsBlock(["Programa anual de auditorías","Plan de auditoría","Informe de auditoría interna","Lista de verificación (checklist)"]);
     },
     revision:(doc,sys)=>{
       return `<h2>Objeto</h2><p>Establecer la sistemática de revisión del sistema de gestión por la alta dirección para asegurar su conveniencia, adecuación y eficacia.</p>
@@ -3404,7 +3477,7 @@ function doPost(e){
         <div class="dh-top">
           <div style="flex:1;min-width:220px">
             <h2>${esc(s.org)}</h2>
-            <div style="margin-top:6px">${s.norms.map(n=>`<span class="norm-chip" style="color:${NORMS[n].color};border-color:${NORMS[n].color}55;background:${NORMS[n].color}18">${esc(NORMS[n].code)}</span>`).join(" ")}</div>
+            <div style="margin-top:6px">${s.norms.map(n=>`<span class="norm-chip" style="color:${NORMS[n].color};border-color:${NORMS[n].color}55;background:${NORMS[n].color}18">${esc(normCode(n,s))}</span>`).join(" ")}</div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn subtle sm" id="editSystemBtn">${iconEdit()} Editar</button>
@@ -3504,7 +3577,19 @@ function doPost(e){
     return {cls:"bajo", t:"Bajo"};
   }
   const RISK_ESTADOS = ["Identificado","En tratamiento","Controlado"];
-  function addRisk(){ const s=curSys(); if(!s) return; s.risks.push({id:uid("rsk"),tipo:"Riesgo",proceso:"",desc:"",prob:3,imp:3,plan:"",responsable:"",estado:"Identificado"}); saveSys(); }
+  function addRisk(){ const s=curSys(); if(!s) return; s.risks.push({id:uid("rsk"),tipo:"Riesgo",proceso:"",desc:"",prob:3,imp:3,probRes:"",impRes:"",plan:"",responsable:"",estado:"Identificado",ncId:""}); saveSys(); }
+  // Crea una acción correctiva/preventiva (no conformidad) vinculada a un riesgo y guarda el vínculo
+  function genRiskAction(riskId){
+    const s=curSys(); if(!s) return; const r=(s.risks||[]).find(x=>x.id===riskId); if(!r) return;
+    const nivel=(+r.prob)*(+r.imp); const opp=r.tipo==="Oportunidad";
+    const nc={ id:uid("nc"), clientId:s.clientId||"", auditId:"", systemId:s.id, linkRef:"", standard:(s.norms&&s.norms[0])?s.norms[0]:"ISO 9001",
+      clause:"6.1", severity:nivel>=15?"Mayor":"Menor",
+      description:(opp?"Acción para aprovechar la oportunidad: ":"Acción derivada del riesgo: ")+(r.desc||"(sin descripción)"),
+      rootCause:"", fiveWhys:["","","","",""], ishikawa:{},
+      action:r.plan||"", status:"En tratamiento", dueDate:addMonths(new Date().toISOString().slice(0,10),1), effectiveness:"", createdAt:stamp(), updatedAt:stamp() };
+    db.nonconformities.push(nc); r.ncId=nc.id; saveSys();
+    toast("Acción correctiva/preventiva creada y vinculada al riesgo");
+  }
   function riesgosHTML(s){
     const risks=s.risks||[];
     const heat={}; // recuento por celda prob(fila)×imp(col)
@@ -3516,8 +3601,16 @@ function doPost(e){
         heatCells+=`<div class="hm-cell rl-${b.cls}" title="Prob ${p} × Impacto ${i} = ${n} (${b.t})">${c||""}</div>`; }
     }
     heatCells+=`<div class="hm-corner"></div>`+[1,2,3,4,5].map(i=>`<div class="hm-axis">${i}</div>`).join("");
+    const ncOpts=(v)=>`<option value="">—</option>`+[1,2,3,4,5].map(o=>`<option ${o===v?"selected":""}>${o}</option>`).join("");
     const rows=risks.map(r=>{
       const nivel=(+r.prob)*(+r.imp); const b=riskBand(nivel); const opp=r.tipo==="Oportunidad";
+      const hasRes=r.probRes!==""&&r.probRes!=null&&r.impRes!==""&&r.impRes!=null;
+      const nivelRes=hasRes?(+r.probRes)*(+r.impRes):null;
+      const bRes=hasRes?riskBand(nivelRes):null;
+      const linkedNc=r.ncId?db.nonconformities.find(x=>x.id===r.ncId):null;
+      const accionCell = linkedNc
+        ? `<button class="linklike" data-risk-opennc="${r.id}" title="Abrir la acción vinculada">${iconCheck2()} ${esc(linkedNc.status||"Vinculada")}</button>`
+        : `<button class="btn subtle xs" data-risk-genaction="${r.id}">${iconPlus()} ${opp?"Crear acción":"Crear correctiva"}</button>`;
       return `<tr>
         <td><select class="mod-sel" data-mod="risks" data-id="${r.id}" data-field="tipo">
           ${["Riesgo","Oportunidad"].map(o=>`<option ${o===r.tipo?"selected":""}>${o}</option>`).join("")}</select></td>
@@ -3527,6 +3620,10 @@ function doPost(e){
         <td><select class="mod-num sm" data-mod="risks" data-id="${r.id}" data-field="imp">${[1,2,3,4,5].map(o=>`<option ${o===+r.imp?"selected":""}>${o}</option>`).join("")}</select></td>
         <td class="rl-cell rl-${opp?"opp":b.cls}"><b>${nivel}</b><span>${opp?"Oport.":b.t}</span></td>
         <td><input class="mod-inp wide" data-mod="risks" data-id="${r.id}" data-field="plan" value="${esc(r.plan)}" placeholder="${opp?"Acción para aprovechar":"Plan de mitigación"}"/></td>
+        <td><select class="mod-num sm" data-mod="risks" data-id="${r.id}" data-field="probRes" title="Probabilidad tras aplicar el tratamiento">${ncOpts(r.probRes===""?null:+r.probRes)}</select></td>
+        <td><select class="mod-num sm" data-mod="risks" data-id="${r.id}" data-field="impRes" title="Impacto tras aplicar el tratamiento">${ncOpts(r.impRes===""?null:+r.impRes)}</select></td>
+        <td class="rl-cell ${hasRes?"rl-"+(opp?"opp":bRes.cls):""}">${hasRes?`<b>${nivelRes}</b><span>${opp?"Oport.":bRes.t}</span>`:'<span class="rp-muted" style="font-size:11px;color:var(--text-dim)">Sin evaluar</span>'}</td>
+        <td>${accionCell}</td>
         <td><input class="mod-inp" data-mod="risks" data-id="${r.id}" data-field="responsable" value="${esc(r.responsable)}" placeholder="Responsable"/></td>
         <td><select class="mod-sel" data-mod="risks" data-id="${r.id}" data-field="estado">${RISK_ESTADOS.map(o=>`<option ${o===r.estado?"selected":""}>${o}</option>`).join("")}</select></td>
         <td class="mod-actions"><button class="iconbtn danger mod-del" data-mod="risks" data-id="${r.id}" title="Eliminar">${iconTrash()}</button></td>
@@ -3548,14 +3645,14 @@ function doPost(e){
       </div>
       <div class="mod-head" style="margin-top:22px">
         <div><h3 class="mod-h">Matriz de riesgos y oportunidades (6.1)</h3>
-        <p class="mod-desc">Nivel de riesgo = Probabilidad × Impacto (escala 1–5). El color se calcula automáticamente.</p></div>
+        <p class="mod-desc">Nivel de riesgo <b>inherente</b> = Probabilidad × Impacto antes del tratamiento. Nivel <b>residual</b> = Probabilidad × Impacto tras aplicar el plan de mitigación/acción. Ambos se calculan automáticamente y el color se asigna solo. Los riesgos Alto/Crítico pueden vincularse a una acción preventiva/correctiva.</p></div>
         <button class="btn sm" id="addRiskBtn">${iconPlus()} Añadir fila</button>
       </div>
       <div class="risk-layout">
         <div class="tablewrap mod-tablewrap">
           <table class="mod-tbl">
-            <thead><tr><th>Tipo</th><th>Proceso</th><th>Descripción</th><th title="Probabilidad 1-5">P</th><th title="Impacto 1-5">I</th><th>Nivel</th><th>Plan de mitigación / acción</th><th>Responsable</th><th>Estado</th><th></th></tr></thead>
-            <tbody>${rows||`<tr><td colspan="10" class="mod-empty">Sin riesgos registrados. Pulsa «Añadir fila» para empezar.</td></tr>`}</tbody>
+            <thead><tr><th>Tipo</th><th>Proceso</th><th>Descripción</th><th title="Probabilidad 1-5">P</th><th title="Impacto 1-5">I</th><th title="Nivel de riesgo inherente">Nivel<br>inherente</th><th>Plan de mitigación / acción</th><th title="Probabilidad residual (tras tratamiento)">P res.</th><th title="Impacto residual (tras tratamiento)">I res.</th><th title="Nivel de riesgo residual">Nivel<br>residual</th><th>Acción vinculada</th><th>Responsable</th><th>Estado</th><th></th></tr></thead>
+            <tbody>${rows||`<tr><td colspan="14" class="mod-empty">Sin riesgos registrados. Pulsa «Añadir fila» para empezar.</td></tr>`}</tbody>
           </table>
         </div>
         <div class="heatmap-wrap">
@@ -3573,7 +3670,18 @@ function doPost(e){
   const SUP_TIPOS=["Producto","Servicio","Subcontratista"];
   function supScore(v){ const d=+v.desempeno||0,e=+v.entrega||0,c=+v.calidad||0; return Math.round(c*0.4+d*0.35+e*0.25); }
   function supStatus(sc){ if(sc>=85) return {cls:"ok",t:"Aprobado"}; if(sc>=60) return {cls:"warn",t:"Condicionado"}; return {cls:"bad",t:"No apto"}; }
-  function addSupplier(){ const s=curSys(); if(!s) return; s.suppliers.push({id:uid("sup"),nombre:"",tipo:"Producto",critico:true,calidad:80,desempeno:80,entrega:80,ultimaEval:new Date().toISOString().slice(0,10),notas:""}); saveSys(); }
+  const SUP_FREQ=["Trimestral","Semestral","Anual"];
+  const SUP_FREQ_MONTHS={Trimestral:3,Semestral:6,Anual:12};
+  function addMonths(dateStr,months){ const d=parseD(dateStr); if(!d) return ""; d.setMonth(d.getMonth()+months); return d.toISOString().slice(0,10); }
+  function supNextEval(v){ if(!v.ultimaEval) return null; return addMonths(v.ultimaEval, SUP_FREQ_MONTHS[v.frecuencia]||12); }
+  function supReevalStatus(v){
+    const next=supNextEval(v); if(!next) return {cls:"susp",t:"Sin fecha"};
+    const d=daysBetween(parseD(next),today());
+    if(d<0) return {cls:"bad",t:"Vencida "+(-d)+" d"};
+    if(d<=30) return {cls:"warn",t:d===0?"Hoy":"En "+d+" d"};
+    return {cls:"ok",t:"En "+d+" d"};
+  }
+  function addSupplier(){ const s=curSys(); if(!s) return; s.suppliers.push({id:uid("sup"),nombre:"",tipo:"Producto",critico:true,calidad:80,desempeno:80,entrega:80,frecuencia:"Anual",ultimaEval:new Date().toISOString().slice(0,10),notas:""}); saveSys(); }
   function proveedoresHTML(s){
     const sup=s.suppliers||[];
     const cnt={Aprobado:0,Condicionado:0,"No apto":0};
@@ -3590,15 +3698,19 @@ function doPost(e){
         <td class="ctr"><span class="score-badge">${sc}</span></td>
         <td class="ctr">${pill(st.cls,st.t)}</td>
         <td><input class="mod-inp" type="date" data-mod="suppliers" data-id="${v.id}" data-field="ultimaEval" value="${esc(v.ultimaEval||"")}"/></td>
+        <td><select class="mod-sel" data-mod="suppliers" data-id="${v.id}" data-field="frecuencia">${SUP_FREQ.map(o=>`<option ${o===v.frecuencia?"selected":""}>${o}</option>`).join("")}</select></td>
+        <td class="ctr"><span class="mono">${supNextEval(v)?fmtDate(supNextEval(v)):"—"}</span><div>${pill(supReevalStatus(v).cls,supReevalStatus(v).t)}</div></td>
         <td class="mod-actions"><button class="iconbtn danger mod-del" data-mod="suppliers" data-id="${v.id}" title="Eliminar">${iconTrash()}</button></td>
       </tr>`;
     }).join("");
+    const overdue=sup.filter(v=>supReevalStatus(v).cls==="bad").length;
     return `
       <div class="mod-head">
         <div><h3 class="mod-h">Evaluación de proveedores y contratistas (8.4)</h3>
-        <p class="mod-desc">Puntúa cada criterio de 0 a 100. La calificación global pondera Calidad 40% · Desempeño 35% · Entrega 25%. El estatus se calcula solo: ≥85 Aprobado · 60–84 Condicionado · &lt;60 No apto.</p></div>
+        <p class="mod-desc">Puntúa cada criterio de 0 a 100. La calificación global pondera Calidad 40% · Desempeño 35% · Entrega 25%. El estatus de homologación se calcula solo: ≥85 Aprobado · 60–84 Condicionado · &lt;60 No apto. La próxima reevaluación periódica se calcula a partir de la última evaluación y la frecuencia elegida.</p></div>
         <button class="btn sm" id="addSupplierBtn">${iconPlus()} Añadir proveedor</button>
       </div>
+      ${overdue?`<div class="mod-alert">${iconWarn()} <b>${overdue}</b> proveedor(es) con la reevaluación periódica vencida.</div>`:""}
       <div class="mod-stats">
         <span class="ms ok">${cnt.Aprobado} aprobados</span>
         <span class="ms warn">${cnt.Condicionado} condicionados</span>
@@ -3607,8 +3719,8 @@ function doPost(e){
       </div>
       <div class="tablewrap mod-tablewrap">
         <table class="mod-tbl">
-          <thead><tr><th>Proveedor</th><th>Tipo</th><th title="Proveedor crítico">Crít.</th><th>Calidad</th><th>Desemp.</th><th>Entrega</th><th>Global</th><th>Estatus</th><th>Última eval.</th><th></th></tr></thead>
-          <tbody>${rows||`<tr><td colspan="10" class="mod-empty">Sin proveedores registrados. Pulsa «Añadir proveedor».</td></tr>`}</tbody>
+          <thead><tr><th>Proveedor</th><th>Tipo</th><th title="Proveedor crítico">Crít.</th><th>Calidad</th><th>Desemp.</th><th>Entrega</th><th>Global</th><th>Estatus</th><th>Última eval.</th><th>Frecuencia</th><th>Próxima reeval.</th><th></th></tr></thead>
+          <tbody>${rows||`<tr><td colspan="12" class="mod-empty">Sin proveedores registrados. Pulsa «Añadir proveedor».</td></tr>`}</tbody>
         </table>
       </div>`;
   }
@@ -3662,6 +3774,10 @@ function doPost(e){
         <div class="kpi-chart">${sparkline(k)}</div>
         <div class="kpi-formula"><input class="mod-inp" data-mod="kpis" data-id="${k.id}" data-field="formula" value="${esc(k.formula||"")}" placeholder="Fórmula de cálculo"/>
           <select class="mod-sel tiny" data-mod="kpis" data-id="${k.id}" data-field="frecuencia">${KPI_FREQ.map(o=>`<option ${o===k.frecuencia?"selected":""}>${o}</option>`).join("")}</select></div>
+        <div class="kpi-formula">
+          <input class="mod-inp" data-mod="kpis" data-id="${k.id}" data-field="recursos" value="${esc(k.recursos||"")}" placeholder="Recursos asignados"/>
+          <input class="mod-inp" data-mod="kpis" data-id="${k.id}" data-field="responsable" value="${esc(k.responsable||"")}" placeholder="Responsable"/>
+        </div>
         <div class="kpi-add">
           <input type="date" class="mod-inp" data-kpi-date="${k.id}" value="${today}"/>
           <input type="number" step="any" class="mod-inp" data-kpi-val="${k.id}" placeholder="Valor"/>
@@ -3688,6 +3804,8 @@ function doPost(e){
       ${field("kformula","Fórmula de cálculo",`<input id="f-kformula" placeholder="Ej.: (entregas a tiempo / total entregas) × 100"/>`)}
       ${row([field("ksentido","Sentido de la meta",`<select id="f-ksentido"><option value="≥">≥ (mayor o igual es mejor)</option><option value="≤">≤ (menor o igual es mejor)</option></select>`),
              field("kmeta","Valor meta",`<input id="f-kmeta" type="number" step="any" placeholder="Ej.: 95"/>`)])}
+      ${row([field("krecursos","Recursos asignados",`<input id="f-krecursos" placeholder="Ej.: presupuesto, personal, equipos…"/>`),
+             field("kresponsable","Responsable",`<input id="f-kresponsable" placeholder="Ej.: Responsable de calidad"/>`)])}
       ${field("kfrecuencia","Frecuencia de medición",`<select id="f-kfrecuencia">${KPI_FREQ.map(o=>`<option>${o}</option>`).join("")}</select>`)}`;
     const foot=document.getElementById("modalFoot");
     foot.innerHTML=`<button class="btn subtle" id="mCancel">Cancelar</button><button class="btn" id="mSave">Crear indicador</button>`;
@@ -3695,7 +3813,7 @@ function doPost(e){
     document.getElementById("mSave").onclick=()=>{
       const g=k=>{ const e=document.getElementById("f-"+k); return e?e.value.trim():""; };
       if(!g("knombre")){ const f=document.querySelector('[data-field="knombre"]'); f.classList.add("invalid"); toast("Indica el nombre del indicador","bad"); return; }
-      const s=curSys(); s.kpis.push({id:uid("kpi"),nombre:g("knombre"),proceso:g("kproceso"),unidad:g("kunidad"),formula:g("kformula"),sentido:g("ksentido")||"≥",meta:toNum(g("kmeta")),frecuencia:g("kfrecuencia")||"Mensual",valores:[]});
+      const s=curSys(); s.kpis.push({id:uid("kpi"),nombre:g("knombre"),proceso:g("kproceso"),unidad:g("kunidad"),formula:g("kformula"),sentido:g("ksentido")||"≥",meta:toNum(g("kmeta")),recursos:g("krecursos"),responsable:g("kresponsable"),frecuencia:g("kfrecuencia")||"Mensual",valores:[]});
       closeModal(); saveSys();
     };
     openModal();
@@ -3826,7 +3944,7 @@ function doPost(e){
     return `<div class="acta">
       <div class="acta-head">
         <div><div class="acta-org">${esc(s.org)}</div><div class="acta-title">Acta de revisión por la dirección</div></div>
-        <div class="acta-meta">${s.norms.map(n=>NORMS[n]?NORMS[n].code:n).join(" · ")}<br>Fecha: <b>${esc(fmtDate(rev.fecha))}</b>${rev.periodo?` · Periodo: ${esc(rev.periodo)}`:""}</div>
+        <div class="acta-meta">${s.norms.map(n=>normCode(n,s)).join(" · ")}<br>Fecha: <b>${esc(fmtDate(rev.fecha))}</b>${rev.periodo?` · Periodo: ${esc(rev.periodo)}`:""}</div>
       </div>
       ${rev.participantes?`<p class="acta-p"><b>Participantes:</b> ${esc(rev.participantes)}</p>`:""}
       ${sect("1. Estado de acciones de revisiones previas y cambios en el contexto", `<p class="acta-p">Contexto (FODA) vigente — Fortalezas: ${esc(k.foda.f||"—")}. Oportunidades: ${esc(k.foda.o||"—")}. Debilidades: ${esc(k.foda.d||"—")}. Amenazas: ${esc(k.foda.a||"—")}.</p>`)}
@@ -3860,6 +3978,90 @@ function doPost(e){
     w.document.close(); setTimeout(()=>{ try{ w.focus(); w.print(); }catch(_){} },300);
   }
   function deleteReview(id){ const s=curSys(); if(!s) return; if(!confirm("¿Eliminar esta acta de revisión?")) return; s.reviews=(s.reviews||[]).filter(r=>r.id!==id); saveSys(); }
+
+  /* ---------- Exportación a PDF de Informe de Auditoría y Ficha de No Conformidad ---------- */
+  function printRecord(kind,id){
+    if(kind==="auditoria") return printAuditReport(id);
+    if(kind==="nc") return printNcReport(id);
+  }
+  function openPrintWindow(title, bodyHtml){
+    const w=window.open("","_blank");
+    if(!w){ toast("Permite las ventanas emergentes para imprimir","warn"); return; }
+    w.document.write(`<!doctype html><meta charset="utf-8"><title>${esc(title)}</title>
+      <style>
+        body{font-family:Georgia,'Times New Roman',serif;color:#12335f;max-width:860px;margin:32px auto;padding:0 28px;line-height:1.5}
+        .rp-head{display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid #12335f;padding-bottom:12px;margin-bottom:18px}
+        .rp-org{font-size:13px;color:#5b6b86;text-transform:uppercase;letter-spacing:.05em}
+        .rp-title{font-size:21px;font-weight:700}
+        .rp-meta{text-align:right;font-size:12px;color:#5b6b86;line-height:1.6}
+        .rp-h{font-size:14px;margin:20px 0 6px;color:#12335f;border-left:3px solid #4f9dff;padding-left:9px}
+        .rp-p{margin:6px 0;font-size:13px}
+        .rp-muted{color:#8a97ab}
+        .rp-badge{display:inline-block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;padding:3px 9px;border-radius:20px;background:#eef3fa;color:#12335f;border:1px solid #cdd7e6}
+        table.rp-tbl{width:100%;border-collapse:collapse;margin:8px 0;font-size:12px}
+        .rp-tbl th,.rp-tbl td{border:1px solid #cdd7e6;padding:6px 8px;text-align:left;vertical-align:top}
+        .rp-tbl th{background:#eef3fa}
+        .rp-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+        .rp-box{border:1px solid #cdd7e6;border-radius:8px;padding:8px 10px}
+        .rp-box b{font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;color:#5b6b86;display:block;margin-bottom:3px}
+        .rp-sign{display:flex;justify-content:space-around;margin-top:48px;font-size:12px;color:#5b6b86}
+        .rp-sign div{border-top:1px solid #9fb0c8;padding-top:8px;width:210px;text-align:center}
+        @media print{ body{margin:0;padding:18px 26px} }
+      </style>
+      ${bodyHtml}`);
+    w.document.close(); setTimeout(()=>{ try{ w.focus(); w.print(); }catch(_){} },300);
+  }
+  function printAuditReport(id){
+    const a=db.audits.find(x=>x.id===id); if(!a) return;
+    const org=clientName(a.clientId);
+    const ncs=db.nonconformities.filter(n=>n.auditId===id);
+    const ncRows=ncs.length?ncs.map(n=>`<tr><td>${esc(n.severity||"—")}</td><td>${esc(n.clause||"—")}</td><td>${esc(n.status||"—")}</td><td>${esc(n.description||"—")}</td></tr>`).join(""):
+      `<tr><td colspan="4" class="rp-muted">No se registraron hallazgos en esta auditoría.</td></tr>`;
+    const body=`
+      <div class="rp-head">
+        <div><div class="rp-org">${esc(org)}</div><div class="rp-title">Informe de auditoría interna</div></div>
+        <div class="rp-meta"><span class="rp-badge">${esc(a.standard||"—")}</span><br>Tipo: <b>${esc(a.type||"—")}</b><br>Fecha: <b>${esc(fmtDate(a.date))}</b><br>Resultado: <b>${esc(a.result||"Pendiente")}</b></div>
+      </div>
+      <p class="rp-p"><b>Auditor:</b> ${esc(a.auditor||"—")}</p>
+      <h3 class="rp-h">1. Objeto y alcance</h3>
+      <p class="rp-p">Verificar la conformidad del sistema de gestión de <b>${esc(org)}</b> con los requisitos de <b>${esc(a.standard||"—")}</b> mediante auditoría de tipo <b>${esc((a.type||"").toLowerCase())}</b>.</p>
+      <h3 class="rp-h">2. Hallazgos y no conformidades detectadas</h3>
+      <table class="rp-tbl"><thead><tr><th>Severidad</th><th>Cláusula</th><th>Estado</th><th>Descripción</th></tr></thead><tbody>${ncRows}</tbody></table>
+      <h3 class="rp-h">3. Observaciones del auditor</h3>
+      <p class="rp-p">${a.notes?esc(a.notes):'<span class="rp-muted">Sin observaciones adicionales.</span>'}</p>
+      <h3 class="rp-h">4. Conclusión</h3>
+      <p class="rp-p">Resultado global de la auditoría: <b>${esc(a.result||"Pendiente")}</b>. ${ncs.length?`Se generaron ${ncs.length} no conformidad(es)/hallazgo(s) que deben tratarse conforme al procedimiento de acciones correctivas (10.2).`:"No se generaron no conformidades."}</p>
+      <div class="rp-sign"><div>Auditor</div><div>Responsable del área auditada</div></div>`;
+    openPrintWindow(`Informe de auditoría — ${org}`, body);
+  }
+  function printNcReport(id){
+    const n=db.nonconformities.find(x=>x.id===id); if(!n) return;
+    const org=clientName(n.clientId);
+    const w5=Array.isArray(n.fiveWhys)?n.fiveWhys:[];
+    const ish=n.ishikawa||{};
+    const whysHtml=w5.some(x=>x)?`<ol>${w5.map((x,i)=>x?`<li>${esc(x)}</li>`:"").join("")}</ol>`:`<p class="rp-muted">Sin análisis de 5 Porqués registrado.</p>`;
+    const ishFields=[["Mano de obra",ish.manoObra],["Método",ish.metodo],["Maquinaria",ish.maquinaria],["Material",ish.material],["Medición",ish.medicion],["Medio ambiente",ish.medioAmbiente]].filter(([,v])=>v);
+    const ishHtml=ishFields.length?`<div class="rp-grid">${ishFields.map(([k,v])=>`<div class="rp-box"><b>${esc(k)}</b>${esc(v)}</div>`).join("")}</div>`:`<p class="rp-muted">Sin diagrama de Ishikawa registrado.</p>`;
+    const body=`
+      <div class="rp-head">
+        <div><div class="rp-org">${esc(org)}</div><div class="rp-title">Ficha de no conformidad</div></div>
+        <div class="rp-meta"><span class="rp-badge">${esc(n.standard||"—")}</span><br>Cláusula: <b>${esc(n.clause||"—")}</b><br>Severidad: <b>${esc(n.severity||"—")}</b><br>Estado: <b>${esc(n.status||"—")}</b></div>
+      </div>
+      <h3 class="rp-h">1. Descripción del hallazgo</h3>
+      <p class="rp-p">${esc(n.description||"—")}</p>
+      <h3 class="rp-h">2. Análisis de causa raíz (10.2) — 5 Porqués</h3>
+      ${whysHtml}
+      <h3 class="rp-h">3. Análisis de causa raíz — Diagrama de Ishikawa (6M)</h3>
+      ${ishHtml}
+      <h3 class="rp-h">4. Causa raíz identificada</h3>
+      <p class="rp-p">${n.rootCause?esc(n.rootCause):'<span class="rp-muted">Sin conclusión registrada.</span>'}</p>
+      <h3 class="rp-h">5. Acción correctiva</h3>
+      <p class="rp-p">${n.action?esc(n.action):'<span class="rp-muted">Sin acción definida.</span>'} ${n.dueDate?` — Plazo de cierre: <b>${esc(fmtDate(n.dueDate))}</b>`:""}</p>
+      <h3 class="rp-h">6. Verificación de eficacia</h3>
+      <p class="rp-p">${n.effectiveness?esc(n.effectiveness):'<span class="rp-muted">Pendiente de verificar la eficacia de la acción.</span>'}</p>
+      <div class="rp-sign"><div>Responsable de la acción</div><div>Responsable de calidad</div></div>`;
+    openPrintWindow(`Ficha de NC — ${org}`, body);
+  }
   function revisionHTML(s){
     const revs=s.reviews||[];
     const list=revs.map((r,idx)=>{ const sn=r.snap||buildReviewSnapshot(s); return `
@@ -3966,7 +4168,10 @@ function doPost(e){
       <td><input class="mod-inp wide" data-mod="legal" data-id="${e.id}" data-field="evidencia" value="${esc(e.evidencia)}" placeholder="Evidencia de cumplimiento"/></td>
       <td><input class="mod-inp" data-mod="legal" data-id="${e.id}" data-field="responsable" value="${esc(e.responsable)}" placeholder="Responsable"/></td>
       <td><input class="mod-inp" type="date" data-mod="legal" data-id="${e.id}" data-field="ultimaEval" value="${esc(e.ultimaEval||"")}"/></td>
-      <td class="mod-actions"><button class="iconbtn danger mod-del" data-mod="legal" data-id="${e.id}" title="Eliminar">${iconTrash()}</button></td>
+      <td class="mod-actions">
+        <button class="iconbtn" data-legal-hist="${e.id}" title="Historial de evidencias (${(e.historial||[]).length})">${iconClock()}</button>
+        <button class="iconbtn danger mod-del" data-mod="legal" data-id="${e.id}" title="Eliminar">${iconTrash()}</button>
+      </td>
     </tr>`).join("");
     return `
       <div class="mod-head">
@@ -3986,20 +4191,52 @@ function doPost(e){
       </div>
       <div class="tablewrap mod-tablewrap">
         <table class="mod-tbl">
-          <thead><tr><th>Requisito</th><th>Tipo</th><th>Ref.</th><th>Proceso/Aspecto</th><th>Cumplimiento</th><th>Evidencia</th><th>Responsable</th><th>Última eval.</th><th></th></tr></thead>
+          <thead><tr><th>Requisito</th><th>Tipo</th><th>Ref.</th><th>Proceso/Aspecto</th><th>Cumplimiento</th><th>Evidencia vigente</th><th>Responsable</th><th>Última eval.</th><th></th></tr></thead>
           <tbody>${rows||`<tr><td colspan="9" class="mod-empty">Sin requisitos registrados. Usa «Cargar del sector» para partir de la legislación típica, o «Añadir requisito».</td></tr>`}</tbody>
         </table>
       </div>`;
   }
-
-  /* ---------- Alertas globales del sistema (Panel) ---------- */
+  // Historial de evidencias de cumplimiento legal
+  function legalHistoryHTML(e){
+    const hist=(e.historial||[]).slice().sort((a,b)=>String(b.fecha).localeCompare(String(a.fecha)));
+    if(!hist.length) return `<p class="mod-desc">Sin evidencias registradas todavía. La evidencia vigente del requisito se mantiene en la tabla; aquí se acumula el histórico completo.</p>`;
+    return `<div class="tablewrap mod-tablewrap"><table class="mod-tbl"><thead><tr><th>Fecha</th><th>Evidencia</th></tr></thead><tbody>${hist.map(h=>`<tr><td class="mono">${esc(fmtDate(h.fecha))}</td><td>${esc(h.evidencia)}</td></tr>`).join("")}</tbody></table></div>`;
+  }
+  function openLegalHistory(id){
+    const s=curSys(); if(!s) return; const e=(s.legal||[]).find(x=>x.id===id); if(!e) return;
+    if(!Array.isArray(e.historial)) e.historial=[];
+    document.getElementById("modalTitle").textContent="Historial de evidencias";
+    document.getElementById("modalBody").innerHTML=`
+      <p class="mod-desc" style="margin:0 0 10px"><b>${esc(e.requisito||"Requisito legal")}</b>${e.referencia?` · ${esc(e.referencia)}`:""}</p>
+      ${legalHistoryHTML(e)}
+      <div style="margin-top:14px">
+        ${row([field("legHistDate","Fecha de la evidencia",`<input type="date" id="f-legHistDate" value="${new Date().toISOString().slice(0,10)}"/>`),
+               field("legHistTxt","Descripción de la evidencia",`<input id="f-legHistTxt" placeholder="Ej.: certificado, informe de inspección, registro…"/>`)])}
+      </div>`;
+    const foot=document.getElementById("modalFoot");
+    foot.innerHTML=`<button class="btn subtle" id="mCancel">Cerrar</button><button class="btn" id="mAddHist">${iconPlus()} Añadir al historial</button>`;
+    document.getElementById("mCancel").onclick=closeModal;
+    document.getElementById("mAddHist").onclick=()=>{
+      const dEl=document.getElementById("f-legHistDate"), tEl=document.getElementById("f-legHistTxt");
+      const d=dEl?dEl.value:"", t=tEl?tEl.value.trim():"";
+      if(!t){ toast("Describe la evidencia antes de añadirla","warn"); return; }
+      e.historial.push({fecha:d||new Date().toISOString().slice(0,10), evidencia:t});
+      e.evidencia=t; e.ultimaEval=d||e.ultimaEval;
+      saveSysQuiet(); render();
+      openLegalHistory(id);
+    };
+    openModal();
+  }
   function collectAlerts(){
     const out=[];
     (db.systems||[]).forEach(s=>{
       ensureModules(s);
       (s.kpis||[]).forEach(k=>{ if(kpiStatus(k).cls==="bad"){ const last=kpiLast(k); out.push({sev:"bad", kind:"KPI", label:(k.nombre||"Indicador")+" fuera de meta", sub:s.org+" · último "+(last?last.valor:"—")+(k.unidad?" "+k.unidad:"")+" (meta "+(k.sentido||"≥")+" "+(k.meta==null?"—":k.meta)+")", goto:"sistema:"+s.id}); } });
       (s.risks||[]).forEach(r=>{ if(r.tipo!=="Oportunidad"){ const nv=(+r.prob)*(+r.imp); if(nv>=15 && r.estado!=="Controlado") out.push({sev:"bad", kind:"Riesgo", label:"Riesgo crítico: "+(r.desc||"(sin descripción)"), sub:s.org+" · nivel "+nv+" · "+(r.estado||"—"), goto:"sistema:"+s.id}); } });
-      (s.suppliers||[]).forEach(v=>{ if(supStatus(supScore(v)).t==="No apto") out.push({sev:"warn", kind:"Proveedor", label:"Proveedor no apto: "+(v.nombre||"(sin nombre)"), sub:s.org+" · puntuación "+supScore(v)+"/100", goto:"sistema:"+s.id}); });
+      (s.suppliers||[]).forEach(v=>{
+        if(supStatus(supScore(v)).t==="No apto") out.push({sev:"warn", kind:"Proveedor", label:"Proveedor no apto: "+(v.nombre||"(sin nombre)"), sub:s.org+" · puntuación "+supScore(v)+"/100", goto:"sistema:"+s.id});
+        if(supReevalStatus(v).cls==="bad") out.push({sev:"warn", kind:"Proveedor", label:"Reevaluación vencida: "+(v.nombre||"(sin nombre)"), sub:s.org+" · "+supReevalStatus(v).t, goto:"sistema:"+s.id});
+      });
       (s.equipment||[]).forEach(e=>{ const d=equipDue(e); if(d.d!=null&&d.d<0) out.push({sev:"bad", kind:"Mantenimiento", label:(e.actividad||"Mantenimiento")+" vencido: "+(e.nombre||e.codigo||"equipo"), sub:s.org+" · "+d.t, goto:"sistema:"+s.id}); });
       (s.comps||[]).forEach(c=>{ if((+c.requerido)-(+c.actual)>=2) out.push({sev:"warn", kind:"Competencia", label:"Brecha de competencia: "+(c.competencia||"—"), sub:s.org+" · "+(c.puesto||"—")+" (req "+c.requerido+" vs "+c.actual+")", goto:"sistema:"+s.id}); });
       (s.legal||[]).forEach(e=>{ if(e.estado==="No cumple") out.push({sev:"bad", kind:"Legal", label:"Incumplimiento legal: "+(e.requisito||"(sin descripción)"), sub:s.org+(e.referencia?(" · "+e.referencia):""), goto:"sistema:"+s.id}); });
@@ -4030,6 +4267,12 @@ function doPost(e){
       const s=curSys(); if(!s) return; const mod=el.dataset.mod;
       const arr=modArr(s,mod); const i=arr.findIndex(x=>x.id===el.dataset.id);
       if(i>=0){ arr.splice(i,1); saveSys(); }
+    });
+    document.querySelectorAll("[data-legal-hist]").forEach(b=>b.onclick=()=>openLegalHistory(b.dataset.legalHist));
+    document.querySelectorAll("[data-risk-genaction]").forEach(b=>b.onclick=()=>genRiskAction(b.dataset.riskGenaction));
+    document.querySelectorAll("[data-risk-opennc]").forEach(b=>b.onclick=()=>{
+      const s=curSys(); if(!s) return; const r=(s.risks||[]).find(x=>x.id===b.dataset.riskOpennc); if(!r||!r.ncId) return;
+      go("ncs"); setTimeout(()=>openForm("nc",r.ncId),0);
     });
     document.querySelectorAll(".mod-foda").forEach(el=>el.onchange=()=>{
       const s=curSys(); if(!s) return; if(!s.foda) s.foda={f:"",o:"",d:"",a:""}; s.foda[el.dataset.foda]=el.value; saveSysQuiet();
@@ -4067,6 +4310,17 @@ function doPost(e){
         </div>
         <div class="err" id="w-norms-err">Selecciona al menos una norma</div>
       </div>
+      <div class="field" id="w-ed9001-wrap" style="${cur.includes("9001")?"":"display:none"}">
+        <label>Edición de ISO 9001</label>
+        <select id="w-ed9001">
+          <option value="2015" ${(!s||s.ed9001!=="2026")?"selected":""}>ISO 9001:2015 — vigente durante la transición</option>
+          <option value="2026" ${(s&&s.ed9001==="2026")?"selected":""}>ISO 9001:2026 — nueva edición (organizaciones migradas)</option>
+        </select>
+        <div class="ed9001-note">
+          <b>Periodo de transición (3 años).</b> La ISO 9001:2015 y la 9001:2026 conviven mientras dure la transición. Elige la edición según el estado de migración de la organización: la <b>2015</b> sigue siendo certificable hasta el fin del periodo de transición; la <b>2026</b> es para organizaciones que ya migran a la nueva edición.
+          <br/>Al elegir <b>2026</b>, el sistema añade el desglose de la cláusula 6.1 (6.1.1 riesgos y oportunidades · 6.1.2 riesgos · 6.1.3 oportunidades), documentos propios (cultura de la calidad y comportamiento ético, términos del Cap. 3, resiliencia de la cadena de suministro) y una fase de transición con análisis de brechas 2015→2026 en el plan de implantación.
+        </div>
+      </div>
       ${field("sector","Sector",`<select id="w-sector">${SECTOR_LIST.map(x=>`<option ${s&&s.sector===x?"selected":""}>${esc(x)}</option>`).join("")}</select>`)}
       ${field("scope","Alcance del sistema",`<textarea id="w-scope" placeholder="Ej.: Diseño, fabricación y comercialización de… en el emplazamiento de…">${esc(s?s.scope:"")}</textarea>`,true)}
       ${field("activities","Actividades / procesos principales",`<input id="w-activities" value="${esc(s?s.activities:"")}" placeholder="Ej.: producción, control de calidad, expedición" />`)}
@@ -4084,7 +4338,11 @@ function doPost(e){
     // toggle visual de las normas
     document.querySelectorAll("#w-norms .normopt").forEach(l=>{
       const cb=l.querySelector("input");
-      cb.onchange=()=>l.classList.toggle("on", cb.checked);
+      cb.onchange=()=>{
+        l.classList.toggle("on", cb.checked);
+        const w=document.getElementById("w-ed9001-wrap");
+        if(w){ const on=!!document.querySelector('#w-norms input[value="9001"]:checked'); w.style.display=on?"":"none"; }
+      };
     });
     openModal();
     setTimeout(()=>{ const f=document.getElementById("w-org"); if(f) f.focus(); },40);
@@ -4101,8 +4359,10 @@ function doPost(e){
     if(!norms.length){ nerr.style.display="block"; ok=false; }
     if(!ok){ toast("Revisa los campos marcados","bad"); return; }
 
+    const edSel = document.getElementById("w-ed9001");
+    const ed9001 = norms.includes("9001") ? ((edSel && edSel.value) || "2015") : null;
     const input = { id, org:get("org"), clientId:document.getElementById("w-clientId").value||null, sector:get("sector"),
-      norms, scope:get("scope"), activities:get("activities"), sites:get("sites"), headcount:get("headcount"), responsible:get("responsible") };
+      norms, ed9001, scope:get("scope"), activities:get("activities"), sites:get("sites"), headcount:get("headcount"), responsible:get("responsible") };
 
     if(id){
       const s=getSystem(id);
@@ -4249,7 +4509,7 @@ function doPost(e){
     const root=zip.folder(("SGI_"+s.org).replace(/[^\w\-]+/g,"_").slice(0,50));
     const catFolder={};
     CAT_ORDER.forEach(c=>{ catFolder[c]=root.folder(String(CAT_ORDER.indexOf(c)+1).padStart(2,"0")+"_"+CAT_LABEL[c].replace(/[^\w\-]+/g,"_")); });
-    let idx=`<!doctype html><meta charset="utf-8"><title>Índice — ${esc(s.org)}</title><body style="font-family:Inter,sans-serif;max-width:800px;margin:30px auto;color:#26324a"><h1>Sistema de Gestión — ${esc(s.org)}</h1><p>${s.norms.map(n=>esc(NORMS[n].code)).join(" · ")}</p><p><i>${esc(s.scope)}</i></p><h2>Índice documental</h2><table style="width:100%;border-collapse:collapse">`;
+    let idx=`<!doctype html><meta charset="utf-8"><title>Índice — ${esc(s.org)}</title><body style="font-family:Inter,sans-serif;max-width:800px;margin:30px auto;color:#26324a"><h1>Sistema de Gestión — ${esc(s.org)}</h1><p>${s.norms.map(n=>esc(normCode(n,s))).join(" · ")}</p><p><i>${esc(s.scope)}</i></p><h2>Índice documental</h2><table style="width:100%;border-collapse:collapse">`;
     s.docs.forEach(d=>{
       const html=docStandaloneHTML(s,d);
       const fname=(d.code+"_"+d.t).replace(/[^\w\-]+/g,"_").slice(0,60)+".html";
@@ -4259,12 +4519,12 @@ function doPost(e){
     idx+=`</table></body>`;
     root.file("00_Indice.html", idx);
     // Maestro de documentos (CSV)
-    const csv="\uFEFF"+["Código,Documento,Categoría,Cláusula,Normas,Estado"].concat(s.docs.map(d=>`${d.code},"${d.t}",${CAT_LABEL[d.cat]},${d.cl},"${d.norms.map(n=>NORMS[n].code).join(' / ')}",${d.status}`)).join("\r\n");
+    const csv="\uFEFF"+["Código,Documento,Categoría,Cláusula,Normas,Estado"].concat(s.docs.map(d=>`${d.code},"${d.t}",${CAT_LABEL[d.cat]},${d.cl},"${d.norms.map(n=>normCode(n,s)).join(' / ')}",${d.status}`)).join("\r\n");
     root.file("00_Maestro_de_documentos.csv", csv);
     // Plan de implantación / análisis de brechas (CSV)
     const ps=planStats(s);
     const planCsv="\uFEFF"+[`Plan de implantación — ${s.org} (${ps.pct}% implantado)`,"Capítulo,Cláusula,Requisito,Normas,Documento,Estado,Responsable,Plazo"]
-      .concat((s.tasks||[]).map(t=>`${t.phase} ${PHASE_LABEL[t.phase]||""},${t.cl},"${t.t.replace(/"/g,"'")}","${(t.norms||[]).map(n=>NORMS[n].code).join(' / ')}",${t.docKey?((s.docs.find(d=>d.k===t.docKey)||{}).code||''):''},${t.status},"${t.responsible||''}",${t.due||''}`)).join("\r\n");
+      .concat((s.tasks||[]).map(t=>`${t.phase} ${PHASE_LABEL[t.phase]||""},${t.cl},"${t.t.replace(/"/g,"'")}","${(t.norms||[]).map(n=>normCode(n,s)).join(' / ')}",${t.docKey?((s.docs.find(d=>d.k===t.docKey)||{}).code||''):''},${t.status},"${t.responsible||''}",${t.due||''}`)).join("\r\n");
     root.file("00_Plan_de_implantacion.csv", planCsv);
     const blob=await zip.generateAsync({type:"blob"});
     downloadBlob(blob, ("SGI_"+s.org).replace(/[^\w\-]+/g,"_").slice(0,50)+"_"+new Date().toISOString().slice(0,10)+".zip");
